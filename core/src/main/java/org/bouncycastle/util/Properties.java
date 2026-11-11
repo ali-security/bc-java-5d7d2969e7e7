@@ -24,6 +24,14 @@ public class Properties
      */
     public static final String EMULATE_ORACLE = "org.bouncycastle.emulate.oracle";
 
+    /**
+     * If set the PKIXNameConstraintValidator will apply the relaxed GSMA SGP.22 (RSP) rules when
+     * matching a directoryName name constraint, allowing the constraint's RDNSequence to appear at
+     * any offset in the subject rather than requiring it to be an initial prefix as RFC 5280
+     * 4.2.1.10 does. Off by default - only eUICC/RSP deployments need it.
+     */
+    public static final String X509_SGP22_NAME_CONSTRAINTS = "org.bouncycastle.x509.sgp22_name_constraints";
+
     private Properties()
     {
     }

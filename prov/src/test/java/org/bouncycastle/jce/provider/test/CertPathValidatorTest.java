@@ -389,8 +389,30 @@ public class CertPathValidatorTest
         PKIXParameters param = new PKIXParameters(trust);
         param.setRevocationEnabled(false);
 
-        cpv.validate(certPath, param);
+        // The GSMA SGP.22 (RSP) eUICC chain carries a permitted directoryName subtree
+        // (O=RSP Test EUM, serialNumber=89049032) which is not an initial prefix of the eUICC
+        // subject (C=DE, O=RSP Test EUM, serialNumber=..., CN=Test eUICC). RFC 5280 4.2.1.10
+        // requires an initial prefix, so by default the chain is now rejected - the relaxed
+        // SGP.22 matching has to be opted into.
+        try
+        {
+            cpv.validate(certPath, param);
+            fail("SGP.22 style name constraint accepted without the SGP.22 override");
+        }
+        catch (CertPathValidatorException e)
+        {
+            isEquals("Subtree check for certificate subject failed.", e.getMessage());
+        }
 
+        Properties.setThreadOverride(Properties.X509_SGP22_NAME_CONSTRAINTS, true);
+        try
+        {
+            cpv.validate(certPath, param);
+        }
+        finally
+        {
+            Properties.removeThreadOverride(Properties.X509_SGP22_NAME_CONSTRAINTS);
+        }
     }
 
     public void performTest()
