@@ -513,42 +513,20 @@ public class ASN1InputStream
             throw new IOException("malformed BMPString encoding encountered");
         }
 
-        char[] string = new char[remainingBytes / 2];
-        int stringPos = 0;
+        // Materialize the contents through DefiniteLengthInputStream.toByteArray(), which grows its
+        // buffer as bytes actually arrive, rather than eagerly allocating new char[remainingBytes / 2]:
+        // a short crafted header declaring a huge BMPString length would otherwise drive a heap-sized
+        // allocation before any content was read (CWE-789).
+        byte[] bytes = defIn.toByteArray();
 
-        byte[] buf = new byte[8];
-        while (remainingBytes >= 8)
+        int charLen = bytes.length / 2;
+        char[] string = new char[charLen];
+        for (int i = 0, bytePos = 0; i < charLen; ++i, bytePos += 2)
         {
-            if (Streams.readFully(defIn, buf, 0, 8) != 8)
-            {
-                throw new EOFException("EOF encountered in middle of BMPString");
-            }
-
-            string[stringPos    ] = (char)((buf[0] << 8) | (buf[1] & 0xFF));
-            string[stringPos + 1] = (char)((buf[2] << 8) | (buf[3] & 0xFF));
-            string[stringPos + 2] = (char)((buf[4] << 8) | (buf[5] & 0xFF));
-            string[stringPos + 3] = (char)((buf[6] << 8) | (buf[7] & 0xFF));
-            stringPos += 4;
-            remainingBytes -= 8;
-        }
-        if (remainingBytes > 0)
-        {
-            if (Streams.readFully(defIn, buf, 0, remainingBytes) != remainingBytes)
-            {
-                throw new EOFException("EOF encountered in middle of BMPString");
-            }
-
-            int bufPos = 0;
-            do
-            {
-                int b1 = buf[bufPos++] << 8;
-                int b2 = buf[bufPos++] & 0xFF;
-                string[stringPos++] = (char)(b1 | b2);
-            }
-            while (bufPos < remainingBytes);
+            string[i] = (char)((bytes[bytePos] << 8) | (bytes[bytePos + 1] & 0xFF));
         }
 
-        if (0 != defIn.getRemaining() || string.length != stringPos)
+        if (0 != defIn.getRemaining() || bytes.length != remainingBytes)
         {
             throw new IllegalStateException();
         }

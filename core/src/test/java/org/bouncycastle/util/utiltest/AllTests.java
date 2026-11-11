@@ -19,6 +19,7 @@ public class AllTests
         suite.addTestSuite(IPTest.class);
         suite.addTestSuite(BigIntegersTest.class);
         suite.addTestSuite(ArraysTest.class);
+        suite.addTestSuite(StreamsTest.class);
         return new BCTestSetup(suite);
     }
 
