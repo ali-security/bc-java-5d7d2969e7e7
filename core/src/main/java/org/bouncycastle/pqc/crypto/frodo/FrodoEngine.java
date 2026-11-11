@@ -100,31 +100,10 @@ class FrodoEngine
         this.gen = mGen;
     }
 
-    private short sample(short r)
-    {
-        short t, e;
-        // 1. t = sum_{i=1}^{len_x - 1} r_i * 2^{i-1}
-        t = (short) ((r & 0xffff) >>> 1);
-        e = 0; // 2. e = 0
-        for (int z = 0; z < T_chi.length; z++)
-        {
-            if (t > T_chi[z]) // 4. if t > T_chi(z)
-                e++; // 5. e = e + 1
-        }
-        // 6. e = (-1)^{r_0} * e
-
-        if (((r & 0xffff) % 2) == 1)
-            e = (short) ((e) * (-1) & 0xffff);
-
-        return e;
-    }
-
     private short[] sample_matrix(short[] r, int offset, int n1, int n2)
     {
         short[] E = new short[n1 * n2];
-        for (int i = 0; i < n1; i++)
-            for (int j = 0; j < n2; j++)
-                E[i*n2+j] = sample(r[i * n2 + j + offset]);
+        Noise.sample(T_chi, r, offset, E);
         return E;
     }
 
@@ -476,10 +455,11 @@ class FrodoEngine
         for (short i = 0; i < a2.length; i++)
             r |= a2[i] ^ b2[i];
 
-//        r = (short) ((-(short)(r >> 1) | -(short)(r & 1)) >> (8*2-1));
-        if (r == 0)
-            return 0;
-        return -1;
+        // Reduce the accumulator to 0 (equal) or -1 (not equal) without branching on it, since
+        // that branch is the key-recovery timing oracle: for t in [0, 0xffff] the value (t | -t)
+        // has its sign bit set iff t != 0, so the arithmetic shift broadcasts that bit.
+        int t = r & 0xffff;
+        return (short)((t | -t) >> 31);
     }
 
     private byte[] ctselect(byte[] a, byte[] b, short selector)

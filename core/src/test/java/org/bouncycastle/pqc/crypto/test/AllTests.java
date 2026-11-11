@@ -4,6 +4,7 @@ import junit.extensions.TestSetup;
 import junit.framework.Test;
 import junit.framework.TestCase;
 import junit.framework.TestSuite;
+import org.bouncycastle.pqc.crypto.frodo.FrodoConstantTimeTest;
 import org.bouncycastle.test.PrintTestResult;
 import org.bouncycastle.util.test.SimpleTestResult;
 
@@ -33,6 +34,7 @@ public class AllTests
         suite.addTestSuite(SphincsPlusTest.class);
         suite.addTestSuite(CMCEVectorTest.class);
         suite.addTestSuite(FrodoVectorTest.class);
+        suite.addTestSuite(FrodoConstantTimeTest.class);
         suite.addTestSuite(SABERVectorTest.class);
         suite.addTestSuite(NTRUTest.class);
         suite.addTestSuite(NTRUParametersTest.class);
