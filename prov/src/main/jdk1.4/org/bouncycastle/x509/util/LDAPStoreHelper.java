@@ -35,6 +35,7 @@ import org.bouncycastle.jce.provider.X509AttrCertParser;
 import org.bouncycastle.jce.provider.X509CRLParser;
 import org.bouncycastle.jce.provider.X509CertPairParser;
 import org.bouncycastle.jce.provider.X509CertParser;
+import org.bouncycastle.ldap.LDAPUtils;
 import org.bouncycastle.util.StoreException;
 import org.bouncycastle.x509.X509AttributeCertStoreSelector;
 import org.bouncycastle.x509.X509AttributeCertificate;
@@ -111,47 +112,6 @@ public class LDAPStoreHelper
         return ctx;
     }
 
-    private String parseDN(String subject, String dNAttributeName)
-    {
-        String temp = subject;
-        int begin = temp.toLowerCase().indexOf(
-            dNAttributeName.toLowerCase() + "=");
-        if (begin == -1)
-        {
-            return "";
-        }
-        temp = temp.substring(begin + dNAttributeName.length());
-        int end = temp.indexOf(',');
-        if (end == -1)
-        {
-            end = temp.length();
-        }
-        while (temp.charAt(end - 1) == '\\')
-        {
-            end = temp.indexOf(',', end + 1);
-            if (end == -1)
-            {
-                end = temp.length();
-            }
-        }
-        temp = temp.substring(0, end);
-        begin = temp.indexOf('=');
-        temp = temp.substring(begin + 1);
-        if (temp.charAt(0) == ' ')
-        {
-            temp = temp.substring(1);
-        }
-        if (temp.startsWith("\""))
-        {
-            temp = temp.substring(1);
-        }
-        if (temp.endsWith("\""))
-        {
-            temp = temp.substring(0, temp.length() - 1);
-        }
-        return temp;
-    }
-
     private Set createCerts(List list, X509CertStoreSelector xselector)
         throws StoreException
     {
@@ -224,7 +184,7 @@ public class LDAPStoreHelper
         {
             for (int i = 0; i < subjectAttributeNames.length; i++)
             {
-                attrValue = parseDN(subject, subjectAttributeNames[i]);
+                attrValue = LDAPUtils.parseDN(subject, subjectAttributeNames[i]);
                 list
                     .addAll(search(attrNames, "*" + attrValue + "*",
                         attrs));
@@ -290,7 +250,7 @@ public class LDAPStoreHelper
         {
             for (int i = 0; i < subjectAttributeNames.length; i++)
             {
-                attrValue = parseDN(subject, subjectAttributeNames[i]);
+                attrValue = LDAPUtils.parseDN(subject, subjectAttributeNames[i]);
                 list
                     .addAll(search(attrNames, "*" + attrValue + "*",
                         attrs));
@@ -385,7 +345,7 @@ public class LDAPStoreHelper
         {
             for (int i = 0; i < subjectAttributeNames.length; i++)
             {
-                attrValue = parseDN(subject, subjectAttributeNames[i]);
+                attrValue = LDAPUtils.parseDN(subject, subjectAttributeNames[i]);
                 list
                     .addAll(search(attrNames, "*" + attrValue + "*",
                         attrs));
@@ -459,7 +419,7 @@ public class LDAPStoreHelper
 
             for (int i = 0; i < issuerAttributeNames.length; i++)
             {
-                attrValue = parseDN(issuer, issuerAttributeNames[i]);
+                attrValue = LDAPUtils.parseDN(issuer, issuerAttributeNames[i]);
                 list
                     .addAll(search(attrNames, "*" + attrValue + "*",
                         attrs));
