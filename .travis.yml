@@ -1,3 +1,41 @@
 language: java
-jdk:
-  - openjdk8
+dist: jammy
+# Tests run on Travis through upstream's Ant build (ant/jdk15+.xml via build1-5to1-8);
+# the release jar itself is built on GitHub Actions (.github/workflows/seal-build.yml).
+install: true
+
+env:
+  global:
+    - ANT_ARGS=-Djunit.printsummary=on
+  jobs:
+    - SEAL_LEG=non-pqc JUNIT_EXCLUDE_TESTS="**/pqc/**/AllTests.java" WAIT_CAP=1200 TEST_DATA=sparse
+    - SEAL_LEG=pqc-crypto JUNIT_INCLUDE_TESTS="**/pqc/crypto/test/AllTests.java" WAIT_CAP=420 TEST_DATA=full
+    - SEAL_LEG=pqc-other JUNIT_INCLUDE_TESTS="**/pqc/**/AllTests.java" JUNIT_EXCLUDE_TESTS="**/pqc/crypto/test/AllTests.java" WAIT_CAP=1500 TEST_DATA=full
+
+before_install:
+  - mkdir -p "$HOME/seal-tools"
+  - curl -fsSL https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u402-b06/OpenJDK8U-jdk_x64_linux_hotspot_8u402b06.tar.gz | tar xz -C "$HOME/seal-tools"
+  - curl -fsSL https://archive.apache.org/dist/ant/binaries/apache-ant-1.10.14-bin.tar.gz | tar xz -C "$HOME/seal-tools"
+  - export JDK8="$HOME/seal-tools/jdk8u402-b06"
+  - export ANT_HOME="$HOME/seal-tools/apache-ant-1.10.14"
+  - export JAVA_HOME="$JDK8"
+  - export PATH="$ANT_HOME/bin:$JDK8/bin:$PATH"
+  - java -version
+  - ant -version
+  # bc-test-data at the release tag; the pqc KAT vectors are only needed by the pqc legs
+  - cd "$TRAVIS_BUILD_DIR/.."
+  - if [ "$TEST_DATA" = "full" ]; then curl -fsSL https://codeload.github.com/bcgit/bc-test-data/tar.gz/refs/tags/r1rv78v1 | tar xz && mv bc-test-data-r1rv78v1 bc-test-data; fi
+  - if [ "$TEST_DATA" = "sparse" ]; then git clone -q --depth 1 --branch r1rv78v1 --filter=blob:none --no-checkout https://github.com/bcgit/bc-test-data.git && cd bc-test-data && git sparse-checkout set --no-cone '/*' '!/pqc/*/' '/pqc/composite/' && git checkout -q && cd ..; fi
+  # pkix/mal-*.crt (added to bc-test-data after r1rv78v1) are read by pkix CheckNameConstraintsTest
+  - mkdir -p bc-test-data/pkix
+  - for f in mal-root.crt mal-ca1.crt mal-ca2.crt mal-leaf.crt; do curl -fsSL -o bc-test-data/pkix/$f https://raw.githubusercontent.com/bcgit/bc-test-data/eef6986af224159d2b6c6a0234dde10c5db28794/pkix/$f; done
+  - du -sh bc-test-data
+  - cd "$TRAVIS_BUILD_DIR"
+
+script:
+  - JDKPATH="$JDK8" sh .travis/keepalive.sh sh -c 'sh build1-5to1-8 > ant-build.log 2>&1'; sh .travis/check-ant-log.sh ant-build.log
+  - JDKPATH="$JDK8" JDK5PATH="$JDK8" sh .travis/keepalive.sh sh build1-5to1-8 test
+  - python3 .travis/seal-test-summary.py build/artifacts/jdk1.5/reports/xml
+
+after_script:
+  - sh .travis/wait-for-log.sh "$WAIT_CAP"

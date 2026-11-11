@@ -1,0 +1,48 @@
+name: seal-build
+
+# Builds the bcprov-jdk15to18 release jar the way the public one was made:
+# ant/jdk15+.xml build-provider (Ant 1.6.5, JDK 8u402, no debug info) followed by
+# pack200 --repack (upstream's pack200.enabled packJar step) and the
+# META-INF/services merge that build1-5to1-8 performs. Tests run on Travis (.travis.yml).
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install JDK 8u402 and Ant 1.6.5
+        run: |
+          mkdir -p "$HOME/seal-tools"
+          curl -fsSL https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u402-b06/OpenJDK8U-jdk_x64_linux_hotspot_8u402b06.tar.gz | tar xz -C "$HOME/seal-tools"
+          curl -fsSL https://archive.apache.org/dist/ant/binaries/apache-ant-1.6.5-bin.tar.gz | tar xz -C "$HOME/seal-tools"
+          # the runner exports ANT_HOME for its preinstalled Ant, which the 1.6.5 launcher would obey
+          echo "ANT_HOME=$HOME/seal-tools/apache-ant-1.6.5" >> "$GITHUB_ENV"
+          echo "JAVA_HOME=$HOME/seal-tools/jdk8u402-b06" >> "$GITHUB_ENV"
+          echo "$HOME/seal-tools/jdk8u402-b06/bin" >> "$GITHUB_PATH"
+          echo "$HOME/seal-tools/apache-ant-1.6.5/bin" >> "$GITHUB_PATH"
+
+      - name: Build provider jar
+        run: |
+          java -version
+          ant -version
+          ant -Drelease.debug=false -f ant/jdk15+.xml build-provider
+
+      - name: Repack and add provider services
+        run: |
+          cd build/artifacts/jdk1.5/jars
+          ls -l
+          pack200 --repack --segment-limit=-1 bcprov-jdk15to18-17801.jar
+          jar uf bcprov-jdk15to18-17801.jar -C "$GITHUB_WORKSPACE/prov/src/main/resources" META-INF
+          mkdir -p "$GITHUB_WORKSPACE/seal-dist"
+          cp bcprov-jdk15to18-17801.jar "$GITHUB_WORKSPACE/seal-dist/bcprov-jdk15to18-1.78.1.jar"
+          unzip -l "$GITHUB_WORKSPACE/seal-dist/bcprov-jdk15to18-1.78.1.jar" | tail -n 1
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bcprov-jdk15to18
+          path: seal-dist/bcprov-jdk15to18-1.78.1.jar
+          if-no-files-found: error
