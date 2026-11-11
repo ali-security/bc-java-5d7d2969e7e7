@@ -10,9 +10,9 @@ class LazyConstructionEnumeration
     private ASN1InputStream aIn;
     private Object          nextObj;
 
-    public LazyConstructionEnumeration(byte[] encoded)
+    public LazyConstructionEnumeration(byte[] encoded, int level, int maxLevel)
     {
-        aIn = new ASN1InputStream(encoded, true);
+        aIn = new ASN1InputStream(encoded, true, level, maxLevel);
         nextObj = readObject();
     }
 

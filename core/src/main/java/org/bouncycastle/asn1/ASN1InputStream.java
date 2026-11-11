@@ -6,6 +6,7 @@ import java.io.FilterInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 
+import org.bouncycastle.util.Properties;
 import org.bouncycastle.util.io.Streams;
 
 /**
@@ -18,9 +19,15 @@ public class ASN1InputStream
     extends FilterInputStream
     implements BERTags
 {
+    static final String MAX_CONS_DEPTH = "org.bouncycastle.asn1.max_cons_depth";
+
+    static final int DEFAULT_MAX_CONS_DEPTH = 64;
+
     private final int limit;
     private final boolean lazyEvaluate;
     private final byte[][] tmpBuffers;
+    private final int level;
+    private final int maxLevel;
 
     public ASN1InputStream(InputStream is)
     {
@@ -48,6 +55,23 @@ public class ASN1InputStream
     public ASN1InputStream(byte[] input, boolean lazyEvaluate)
     {
         this(new ByteArrayInputStream(input), input.length, lazyEvaluate);
+    }
+
+    /**
+     * Continue a lazily-deferred parse at a specific nested-construction level, so that forcing a
+     * LazyEncodedSequence keeps counting the nested-construction guard up from where the deferred
+     * parse left off instead of resetting it to zero. Without this a deeply nested SEQUENCE captured
+     * lazily would parse one level per force() with the level reset each time, defeating the
+     * max_cons_depth limit and allowing a StackOverflowError on a whole-tree walk of crafted input.
+     *
+     * @param input array containing ASN.1 encoded data.
+     * @param lazyEvaluate true if parsing inside constructed objects can be delayed.
+     * @param level the nested-construction level the deferred contents sit at.
+     * @param maxLevel the maximum nested-construction level allowed.
+     */
+    ASN1InputStream(byte[] input, boolean lazyEvaluate, int level, int maxLevel)
+    {
+        this(new ByteArrayInputStream(input), input.length, lazyEvaluate, new byte[11][], level, maxLevel);
     }
 
     /**
@@ -92,6 +116,18 @@ public class ASN1InputStream
         this.limit = limit;
         this.lazyEvaluate = lazyEvaluate;
         this.tmpBuffers = tmpBuffers;
+        this.level = 0;
+        this.maxLevel = Properties.asInteger(MAX_CONS_DEPTH, DEFAULT_MAX_CONS_DEPTH);
+    }
+
+    private ASN1InputStream(InputStream input, int limit, boolean lazyEvaluate, byte[][] tmpBuffers, int level, int maxLevel)
+    {
+        super(input);
+        this.limit = limit;
+        this.lazyEvaluate = lazyEvaluate;
+        this.tmpBuffers = tmpBuffers;
+        this.level = level;
+        this.maxLevel = maxLevel;
     }
 
     int getLimit()
@@ -167,7 +203,16 @@ public class ASN1InputStream
             }
             else if (lazyEvaluate)
             {
-                return new LazyEncodedSequence(defIn.toByteArray());
+                // Record the nested-construction level the captured contents belong to, so that
+                // forcing the lazy sequence later continues to count the guard up rather than
+                // resetting it. The check throws here for an over-deep SEQUENCE, exactly as the
+                // eager path (readVector) would when descending into its contents.
+                if (this.level == this.maxLevel)
+                {
+                    throw new IOException("maximum nested construction level reached - increase " + MAX_CONS_DEPTH + " (currently " + maxLevel + ")");
+                }
+
+                return new LazyEncodedSequence(defIn.toByteArray(), level + 1, maxLevel);
             }
             else
             {
@@ -329,7 +374,12 @@ public class ASN1InputStream
             return new ASN1EncodableVector(0);
         }
 
-        return new ASN1InputStream(defIn, remaining, lazyEvaluate, tmpBuffers).readVector();
+        if (this.level == this.maxLevel)
+        {
+            throw new IOException("maximum nested construction level reached - increase " + MAX_CONS_DEPTH + " (currently " + maxLevel + ")");
+        }
+
+        return new ASN1InputStream(defIn, remaining, lazyEvaluate, tmpBuffers, level + 1, maxLevel).readVector();
     }
 
     static int readTagNumber(InputStream s, int tag) 

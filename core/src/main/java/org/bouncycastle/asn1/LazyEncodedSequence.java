@@ -11,8 +11,10 @@ class LazyEncodedSequence
     extends ASN1Sequence
 {
     private byte[] encoded;
+    private final int contentsLevel;
+    private final int contentsMaxLevel;
 
-    LazyEncodedSequence(byte[] encoded) throws IOException
+    LazyEncodedSequence(byte[] encoded, int contentsLevel, int contentsMaxLevel) throws IOException
     {
         // NOTE: Initially, the actual 'elements' will be empty
         super();
@@ -23,6 +25,8 @@ class LazyEncodedSequence
         }
 
         this.encoded = encoded;
+        this.contentsLevel = contentsLevel;
+        this.contentsMaxLevel = contentsMaxLevel;
     }
 
     public ASN1Encodable getObjectAt(int index)
@@ -37,7 +41,7 @@ class LazyEncodedSequence
         byte[] encoded = getContents();
         if (null != encoded)
         {
-            return new LazyConstructionEnumeration(encoded);
+            return new LazyConstructionEnumeration(encoded, contentsLevel, contentsMaxLevel);
         }
 
         return super.getObjects();
@@ -140,7 +144,7 @@ class LazyEncodedSequence
     {
         if (null != encoded)
         {
-            ASN1InputStream aIn = new ASN1InputStream(encoded, true);
+            ASN1InputStream aIn = new ASN1InputStream(encoded, true, contentsLevel, contentsMaxLevel);
             try
             {
                 ASN1EncodableVector v = aIn.readVector();
