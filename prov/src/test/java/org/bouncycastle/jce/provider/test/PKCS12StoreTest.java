@@ -26,18 +26,26 @@ import javax.swing.KeyStroke;
 import org.bouncycastle.asn1.ASN1BMPString;
 import org.bouncycastle.asn1.ASN1Encodable;
 import org.bouncycastle.asn1.ASN1InputStream;
+import org.bouncycastle.asn1.ASN1Integer;
 import org.bouncycastle.asn1.ASN1OctetString;
 import org.bouncycastle.asn1.ASN1Sequence;
 import org.bouncycastle.asn1.ASN1StreamParser;
 import org.bouncycastle.asn1.DERBMPString;
 import org.bouncycastle.asn1.DERNull;
+import org.bouncycastle.asn1.DEROctetString;
+import org.bouncycastle.asn1.DERSequence;
 import org.bouncycastle.asn1.DERSet;
 import org.bouncycastle.asn1.DLSequenceParser;
 import org.bouncycastle.asn1.cryptopro.CryptoProObjectIdentifiers;
+import org.bouncycastle.asn1.nist.NISTObjectIdentifiers;
+import org.bouncycastle.asn1.pkcs.AuthenticatedSafe;
 import org.bouncycastle.asn1.pkcs.ContentInfo;
 import org.bouncycastle.asn1.pkcs.EncryptedData;
 import org.bouncycastle.asn1.pkcs.EncryptedPrivateKeyInfo;
+import org.bouncycastle.asn1.pkcs.EncryptionScheme;
+import org.bouncycastle.asn1.pkcs.KeyDerivationFunc;
 import org.bouncycastle.asn1.pkcs.MacData;
+import org.bouncycastle.asn1.pkcs.PBES2Parameters;
 import org.bouncycastle.asn1.pkcs.PKCSObjectIdentifiers;
 import org.bouncycastle.asn1.pkcs.Pfx;
 import org.bouncycastle.asn1.pkcs.SafeBag;
@@ -45,8 +53,10 @@ import org.bouncycastle.asn1.x500.X500Name;
 import org.bouncycastle.asn1.x500.X500NameBuilder;
 import org.bouncycastle.asn1.x500.style.BCStyle;
 import org.bouncycastle.asn1.x509.AlgorithmIdentifier;
+import org.bouncycastle.asn1.x509.DigestInfo;
 import org.bouncycastle.asn1.x509.KeyPurposeId;
 import org.bouncycastle.internal.asn1.misc.MiscObjectIdentifiers;
+import org.bouncycastle.internal.asn1.oiw.OIWObjectIdentifiers;
 import org.bouncycastle.jcajce.PKCS12StoreParameter;
 import org.bouncycastle.jce.PKCS12Util;
 import org.bouncycastle.jce.interfaces.PKCS12BagAttributeCarrier;
@@ -2041,6 +2051,149 @@ public class PKCS12StoreTest
         System.clearProperty("org.bouncycastle.pkcs12.max_it_count");
     }
 
+    /*
+     * With org.bouncycastle.pkcs12.max_it_count unset, every iteration count read from a PKCS#12
+     * file must still be bounded (default 5,000,000) - otherwise a crafted PFX can force up to
+     * 2^31 - 1 rounds of key derivation before any MAC or decryption failure is reported.
+     */
+    private void testIterationCountDefaultLimit()
+        throws Exception
+    {
+        System.clearProperty("org.bouncycastle.pkcs12.max_it_count");
+
+        BigInteger[] badCounts = new BigInteger[]{
+            BigInteger.valueOf(5000001),
+            BigInteger.valueOf(Integer.MAX_VALUE),
+            BigInteger.ONE.shiftLeft(31),
+            BigInteger.valueOf(-1)
+        };
+        String[] expectedMessages = new String[]{
+            "iteration count 5000001 greater than 5000000",
+            "iteration count 2147483647 greater than 5000000",
+            "iteration counts >= 2^31 are not suppported",
+            "negative iteration count found"
+        };
+
+        for (int i = 0; i != badCounts.length; i++)
+        {
+            BigInteger count = badCounts[i];
+            String expected = expectedMessages[i];
+            StringBuffer accepted = new StringBuffer();
+
+            checkIterationCountRejected(accepted, expected, "MacData",
+                createIterationCountPfx(createSHA1MacData(count), null));
+            checkIterationCountRejected(accepted, expected, "PBE shrouded key bag",
+                createIterationCountPfx(null, createShroudedKeyBagContent(createPKCS12PbeAlgId(count))));
+            checkIterationCountRejected(accepted, expected, "PBES2 shrouded key bag",
+                createIterationCountPfx(null, createShroudedKeyBagContent(createPBES2AlgId(count))));
+            checkIterationCountRejected(accepted, expected, "PBE encrypted data",
+                createIterationCountPfx(null, createEncryptedDataContent(createPKCS12PbeAlgId(count))));
+            checkIterationCountRejected(accepted, expected, "PBES2 encrypted data",
+                createIterationCountPfx(null, createEncryptedDataContent(createPBES2AlgId(count))));
+
+            try
+            {
+                PKCS12Util.convertToDefiniteLength(createIterationCountPfx(createSHA1MacData(count), null), passwd, BC);
+                accepted.append(" [PKCS12Util.convertToDefiniteLength: converted]");
+            }
+            catch (Exception e)
+            {
+                if (e.getMessage() == null || e.getMessage().indexOf(expected) < 0)
+                {
+                    accepted.append(" [PKCS12Util.convertToDefiniteLength: " + e + "]");
+                }
+            }
+
+            if (accepted.length() != 0)
+            {
+                fail("iteration count " + count + " not rejected for:" + accepted);
+            }
+        }
+    }
+
+    private void checkIterationCountRejected(StringBuffer accepted, String expected, String label, byte[] pfx)
+    {
+        try
+        {
+            KeyStore store = KeyStore.getInstance("PKCS12", BC);
+
+            store.load(new ByteArrayInputStream(pfx), passwd);
+            accepted.append(" [" + label + ": loaded]");
+        }
+        catch (Exception e)
+        {
+            if (e.getMessage() == null || e.getMessage().indexOf(expected) < 0)
+            {
+                accepted.append(" [" + label + ": " + e + "]");
+            }
+        }
+    }
+
+    private static byte[] createIterationCountPfx(MacData macData, ContentInfo content)
+        throws IOException
+    {
+        ContentInfo[] contents = (content == null) ? new ContentInfo[0] : new ContentInfo[]{content};
+        AuthenticatedSafe authSafe = new AuthenticatedSafe(contents);
+        ContentInfo mainInfo = new ContentInfo(PKCSObjectIdentifiers.data, new DEROctetString(authSafe.getEncoded()));
+
+        return new Pfx(mainInfo, macData).getEncoded();
+    }
+
+    private static MacData createMacData(AlgorithmIdentifier macAlgId, int macLength, BigInteger iterationCount)
+    {
+        return MacData.getInstance(new DERSequence(new ASN1Encodable[]{
+            new DigestInfo(macAlgId, new byte[macLength]),
+            new DEROctetString(new byte[20]),
+            new ASN1Integer(iterationCount)}));
+    }
+
+    private static MacData createSHA1MacData(BigInteger iterationCount)
+    {
+        return createMacData(new AlgorithmIdentifier(OIWObjectIdentifiers.idSHA1, DERNull.INSTANCE), 20, iterationCount);
+    }
+
+    private static ASN1Encodable createPBKDF2Params(BigInteger iterationCount)
+    {
+        return new DERSequence(new ASN1Encodable[]{
+            new DEROctetString(new byte[16]),
+            new ASN1Integer(iterationCount),
+            new ASN1Integer(32),
+            new AlgorithmIdentifier(PKCSObjectIdentifiers.id_hmacWithSHA256, DERNull.INSTANCE)});
+    }
+
+    private static AlgorithmIdentifier createPKCS12PbeAlgId(BigInteger iterationCount)
+    {
+        return new AlgorithmIdentifier(PKCSObjectIdentifiers.pbeWithSHAAnd3_KeyTripleDES_CBC,
+            new DERSequence(new ASN1Encodable[]{
+                new DEROctetString(new byte[20]),
+                new ASN1Integer(iterationCount)}));
+    }
+
+    private static AlgorithmIdentifier createPBES2AlgId(BigInteger iterationCount)
+    {
+        return new AlgorithmIdentifier(PKCSObjectIdentifiers.id_PBES2, new PBES2Parameters(
+            new KeyDerivationFunc(PKCSObjectIdentifiers.id_PBKDF2, createPBKDF2Params(iterationCount)),
+            new EncryptionScheme(NISTObjectIdentifiers.id_aes256_CBC, new DEROctetString(new byte[16]))));
+    }
+
+    private static ContentInfo createShroudedKeyBagContent(AlgorithmIdentifier algId)
+        throws IOException
+    {
+        SafeBag bag = new SafeBag(PKCSObjectIdentifiers.pkcs8ShroudedKeyBag,
+            new EncryptedPrivateKeyInfo(algId, new byte[32]));
+
+        return new ContentInfo(PKCSObjectIdentifiers.data,
+            new DEROctetString(new DERSequence(bag).getEncoded()));
+    }
+
+    private static ContentInfo createEncryptedDataContent(AlgorithmIdentifier algId)
+    {
+        EncryptedData encData = new EncryptedData(PKCSObjectIdentifiers.data, algId,
+            new DEROctetString(new byte[32]));
+
+        return new ContentInfo(PKCSObjectIdentifiers.encryptedData, encData.toASN1Primitive());
+    }
+
     private void testBCFKSLoad()
         throws Exception
     {
@@ -2189,6 +2342,7 @@ public class PKCS12StoreTest
         throws Exception
     {
         testIterationCount();
+        testIterationCountDefaultLimit();
         testPKCS12Store();
         testGOSTStore();
         testChainCycle();
