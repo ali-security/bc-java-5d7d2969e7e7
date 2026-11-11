@@ -2,6 +2,7 @@ package org.bouncycastle.crypto.test;
 
 import java.security.SecureRandom;
 
+import org.bouncycastle.crypto.InvalidCipherTextException;
 import org.bouncycastle.crypto.engines.DSTU7624Engine;
 import org.bouncycastle.crypto.engines.DSTU7624WrapEngine;
 import org.bouncycastle.crypto.macs.DSTU7624Mac;
@@ -96,6 +97,135 @@ public class DSTU7624Test
         CCMModeTests();
         XTSModeTests();
         GCMModeTests();
+        kccmKgcmNoUnverifiedPlaintextOnFailure();
+    }
+
+    private void kccmKgcmNoUnverifiedPlaintextOnFailure()
+        throws Exception
+    {
+        byte[] key = Hex.decode("000102030405060708090A0B0C0D0E0F");
+        byte[] iv = Hex.decode("101112131415161718191A1B1C1D1E1F");
+        byte[] plaintext = Hex.decode("303132333435363738393A3B3C3D3E3F404142434445464748494A4B4C4D4E4F");
+
+        // KCCM: plaintext is recovered into the output before the MAC is checked, so a tag failure
+        // must not leave it there.
+        {
+            AEADParameters params = new AEADParameters(new KeyParameter(key), 128, iv);
+            KCCMBlockCipher ccm = new KCCMBlockCipher(new DSTU7624Engine(128));
+            ccm.init(true, params);
+            byte[] ct = new byte[ccm.getOutputSize(plaintext.length)];
+            ccm.doFinal(ct, ccm.processBytes(plaintext, 0, plaintext.length, ct, 0));
+
+            ct[ct.length - 1] ^= 0x01;  // corrupt the (masked) MAC
+
+            ccm.init(false, params);
+            byte[] out = new byte[ct.length];
+            Arrays.fill(out, (byte)0x55);
+            try
+            {
+                ccm.doFinal(out, ccm.processBytes(ct, 0, ct.length, out, 0));
+                fail("tampered KCCM ciphertext must not verify");
+            }
+            catch (InvalidCipherTextException e)
+            {
+                checkNoUnverifiedPlaintext("KCCM", out, plaintext.length);
+            }
+        }
+
+        // KCCM with a MAC shorter than the block (256-bit block, 128-bit MAC), where the MAC is
+        // recovered from a separate trailing keystream block, and a non-zero output offset.
+        {
+            byte[] key256 = Hex.decode("000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F");
+            byte[] iv256 = Hex.decode("202122232425262728292A2B2C2D2E2F303132333435363738393A3B3C3D3E3F");
+            AEADParameters params = new AEADParameters(new KeyParameter(key256), 128, iv256);
+
+            KCCMBlockCipher ccm = new KCCMBlockCipher(new DSTU7624Engine(256));
+            ccm.init(true, params);
+            byte[] ct = new byte[ccm.getOutputSize(plaintext.length)];
+            ccm.doFinal(ct, ccm.processBytes(plaintext, 0, plaintext.length, ct, 0));
+
+            byte[] tampered = Arrays.clone(ct);
+            tampered[tampered.length - 1] ^= 0x01;  // corrupt the (masked) MAC
+
+            int outOff = 7;
+            ccm = new KCCMBlockCipher(new DSTU7624Engine(256));
+            ccm.init(false, params);
+            byte[] out = new byte[outOff + tampered.length];
+            Arrays.fill(out, (byte)0x55);
+            try
+            {
+                ccm.doFinal(out, outOff + ccm.processBytes(tampered, 0, tampered.length, out, outOff));
+                fail("tampered KCCM ciphertext (short MAC) must not verify");
+            }
+            catch (InvalidCipherTextException e)
+            {
+                checkNoUnverifiedPlaintext("KCCM (short MAC)", out, out.length);
+            }
+
+            // the genuine ciphertext still decrypts, at the requested output offset
+            ccm = new KCCMBlockCipher(new DSTU7624Engine(256));
+            ccm.init(false, params);
+            out = new byte[outOff + ct.length];
+            int len = ccm.processBytes(ct, 0, ct.length, out, outOff);
+            len += ccm.doFinal(out, outOff + len);
+            if (len != plaintext.length
+                || !Arrays.areEqual(plaintext, Arrays.copyOfRange(out, outOff, outOff + plaintext.length)))
+            {
+                fail("KCCM (short MAC) decryption output incorrect after verified tag");
+            }
+        }
+
+        // KCCM: input shorter than the MAC must be rejected as invalid ciphertext.
+        {
+            AEADParameters params = new AEADParameters(new KeyParameter(key), 128, iv);
+            KCCMBlockCipher ccm = new KCCMBlockCipher(new DSTU7624Engine(128));
+            ccm.init(false, params);
+            byte[] out = new byte[64];
+            try
+            {
+                ccm.doFinal(out, 0);
+                fail("empty KCCM ciphertext must not verify");
+            }
+            catch (InvalidCipherTextException e)
+            {
+                // expected
+            }
+        }
+
+        // KGCM
+        {
+            AEADParameters params = new AEADParameters(new KeyParameter(key), 128, iv);
+            KGCMBlockCipher gcm = new KGCMBlockCipher(new DSTU7624Engine(128));
+            gcm.init(true, params);
+            byte[] ct = new byte[gcm.getOutputSize(plaintext.length)];
+            gcm.doFinal(ct, gcm.processBytes(plaintext, 0, plaintext.length, ct, 0));
+
+            ct[ct.length - 1] ^= 0x01;  // corrupt the tag
+
+            gcm.init(false, params);
+            byte[] out = new byte[ct.length];
+            Arrays.fill(out, (byte)0x55);
+            try
+            {
+                gcm.doFinal(out, gcm.processBytes(ct, 0, ct.length, out, 0));
+                fail("tampered KGCM ciphertext must not verify");
+            }
+            catch (InvalidCipherTextException e)
+            {
+                checkNoUnverifiedPlaintext("KGCM", out, plaintext.length);
+            }
+        }
+    }
+
+    private void checkNoUnverifiedPlaintext(String name, byte[] out, int plaintextLen)
+    {
+        for (int i = 0; i != plaintextLen; i++)
+        {
+            if (out[i] != (byte)0x55)
+            {
+                fail(name + " left unverified plaintext in the output buffer on tag failure");
+            }
+        }
     }
 
     public static void main(

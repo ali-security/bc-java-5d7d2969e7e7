@@ -204,6 +204,76 @@ public class CCMTest
                 new KeyParameter(K1), 32, N2));
         AEADTestUtil.testBufferSizeChecks(this, new CCMBlockCipher(AESEngine.newInstance()), new AEADParameters(
                 new KeyParameter(K1), 32, N2));
+
+        noUnverifiedPlaintextOnFailure();
+    }
+
+    private void noUnverifiedPlaintextOnFailure()
+        throws Exception
+    {
+        CCMBlockCipher ccm = new CCMBlockCipher(AESEngine.newInstance());
+        ccm.init(false, new AEADParameters(new KeyParameter(K2), 48, N2, A2));
+
+        // Corrupt the authentication tag so verification fails; the ciphertext body is unchanged.
+        byte[] tampered = Arrays.clone(C2);
+        tampered[tampered.length - 1] ^= 0x01;
+
+        byte[] output = new byte[ccm.getOutputSize(tampered.length)];
+        Arrays.fill(output, (byte)0x55);
+
+        try
+        {
+            ccm.processPacket(tampered, 0, tampered.length, output, 0);
+            fail("tampered CCM ciphertext must not verify");
+        }
+        catch (InvalidCipherTextException e)
+        {
+            // On a tag-check failure the caller's output buffer must not be left holding the
+            // unverified CTR plaintext.
+            for (int i = 0; i != output.length; i++)
+            {
+                if (output[i] != (byte)0x55)
+                {
+                    fail("CCM left unverified plaintext in the output buffer on tag failure");
+                }
+            }
+        }
+
+        // Same check through the streaming API (processBytes/doFinal, as used by the JCE provider)
+        // with a non-zero output offset.
+        ccm.init(false, new AEADParameters(new KeyParameter(K2), 48, N2, A2));
+
+        output = new byte[ccm.getOutputSize(tampered.length) + 10];
+        Arrays.fill(output, (byte)0x55);
+
+        try
+        {
+            int len = ccm.processBytes(tampered, 0, tampered.length, output, 10);
+            ccm.doFinal(output, 10 + len);
+            fail("tampered CCM ciphertext must not verify (doFinal)");
+        }
+        catch (InvalidCipherTextException e)
+        {
+            for (int i = 0; i != output.length; i++)
+            {
+                if (output[i] != (byte)0x55)
+                {
+                    fail("CCM left unverified plaintext in the output buffer on tag failure (doFinal)");
+                }
+            }
+        }
+
+        // A genuine ciphertext still decrypts correctly at a non-zero output offset.
+        ccm.init(false, new AEADParameters(new KeyParameter(K2), 48, N2, A2));
+
+        output = new byte[ccm.getOutputSize(C2.length) + 10];
+        int len = ccm.processBytes(C2, 0, C2.length, output, 10);
+        len += ccm.doFinal(output, 10 + len);
+
+        if (len != P2.length || !isEqual(P2, output, 10))
+        {
+            fail("CCM decryption output incorrect after verified tag");
+        }
     }
 
     private boolean isEqual(byte[] exp, byte[] other, int off)

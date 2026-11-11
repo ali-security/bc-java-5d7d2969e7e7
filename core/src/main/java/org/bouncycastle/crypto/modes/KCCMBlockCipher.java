@@ -306,24 +306,39 @@ public class KCCMBlockCipher
         }
         else
         {
-            if ((len - macSize) % engine.getBlockSize() != 0)
+            if (len < macSize)
+            {
+                throw new InvalidCipherTextException("data too short");
+            }
+
+            int dataLen = len - macSize;
+
+            if (dataLen % engine.getBlockSize() != 0)
             {
                 throw new DataLengthException("partial blocks not supported");
             }
 
             engine.processBlock(nonce, 0, s, 0);
 
+            // Recover the plaintext (followed by the recovered MAC) into a private buffer and verify
+            // the MAC before writing any of it to the caller's output: on a tag failure the caller's
+            // buffer must not be left holding unverified gamma plaintext (matches CCMBlockCipher /
+            // GCMSIVBlockCipher).
+            byte[] plain = new byte[len];
+            int plainOff = 0;
+            int inPos = inOff;
+
             int blocks = len / engine.getBlockSize();
 
             for (int blockNum = 0; blockNum < blocks; blockNum++)
             {
-                ProcessBlock(in, inOff, len, out, outOff);
+                ProcessBlock(in, inPos, len, plain, plainOff);
 
-                inOff += engine.getBlockSize();
-                outOff += engine.getBlockSize();
+                inPos += engine.getBlockSize();
+                plainOff += engine.getBlockSize();
             }
 
-            if (len > inOff)
+            if (len > plainOff)
             {
                 for (int byteIndex = 0; byteIndex < counter.length; byteIndex++)
                 {
@@ -334,9 +349,9 @@ public class KCCMBlockCipher
 
                 for (int byteIndex = 0; byteIndex < macSize; byteIndex++)
                 {
-                    out[outOff + byteIndex] = (byte)(buffer[byteIndex] ^ in[inOff + byteIndex]);
+                    plain[plainOff + byteIndex] = (byte)(buffer[byteIndex] ^ in[inPos + byteIndex]);
                 }
-                outOff += macSize;
+                plainOff += macSize;
             }
 
             for (int byteIndex = 0; byteIndex < counter.length; byteIndex++)
@@ -346,9 +361,9 @@ public class KCCMBlockCipher
 
             engine.processBlock(s, 0, buffer, 0);
 
-            System.arraycopy(out, outOff - macSize, buffer, 0, macSize);
+            System.arraycopy(plain, plainOff - macSize, buffer, 0, macSize);
 
-            CalculateMac(out, 0, outOff - macSize);
+            CalculateMac(plain, 0, plainOff - macSize);
 
             System.arraycopy(macBlock, 0, mac, 0, macSize);
 
@@ -358,12 +373,17 @@ public class KCCMBlockCipher
 
             if (!Arrays.constantTimeAreEqual(mac, calculatedMac))
             {
+                Arrays.clear(plain);
                 throw new InvalidCipherTextException("mac check failed");
             }
 
+            // Only now (MAC verified) expose the recovered plaintext, followed by the recovered MAC,
+            // in the caller's output - the same buffer layout as before.
+            System.arraycopy(plain, 0, out, outOff, plainOff);
+
             reset();
 
-            return len - macSize;
+            return dataLen;
         }
     }
 
