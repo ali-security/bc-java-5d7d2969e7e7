@@ -36,6 +36,7 @@ import org.bouncycastle.asn1.x9.X9ECParameters;
 import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.bouncycastle.jce.spec.ECParameterSpec;
 import org.bouncycastle.math.ec.ECCurve;
+import org.bouncycastle.util.Properties;
 import org.bouncycastle.util.encoders.Base64;
 import org.bouncycastle.util.test.SimpleTest;
 
@@ -284,6 +285,76 @@ public class KeyStoreTest
         cert.verify(pubKey);
     }
 
+    // CVE-2018-5382: the default BKS keystore must refuse to load a legacy version 0/1 store
+    // (which derives a 16-bit, brute-forceable HMAC integrity key) unless the caller has explicitly
+    // opted in via org.bouncycastle.bks.enable_v1. The test harness sets that system property, so
+    // we override it off on this thread to exercise the default behaviour.
+    private void v1RejectedByDefaultTest()
+        throws Exception
+    {
+        Properties.setThreadOverride(Properties.BKS_ENABLE_V1, false);
+        try
+        {
+            KeyStore ks = KeyStore.getInstance("BKS", "BC");
+
+            ks.load(new ByteArrayInputStream(v1BKS), oldStorePass);
+
+            fail("default BKS loaded a version 1 store without " + Properties.BKS_ENABLE_V1);
+        }
+        catch (IOException e)
+        {
+            if (!e.getMessage().startsWith("BKS version 1 keystore not supported"))
+            {
+                fail("unexpected exception: " + e.getMessage());
+            }
+        }
+        finally
+        {
+            Properties.removeThreadOverride(Properties.BKS_ENABLE_V1);
+        }
+    }
+
+    // CVE-2018-5382: version 0 stores use the same weak HMAC key derivation as version 1, so a
+    // store whose (unauthenticated) version field has been rewritten to 0 must be refused too.
+    private void v0RejectedByDefaultTest()
+        throws Exception
+    {
+        byte[] v0BKS = (byte[])v1BKS.clone();
+        v0BKS[3] = 0;
+
+        Properties.setThreadOverride(Properties.BKS_ENABLE_V1, false);
+        try
+        {
+            KeyStore ks = KeyStore.getInstance("BKS", "BC");
+
+            ks.load(new ByteArrayInputStream(v0BKS), oldStorePass);
+
+            fail("default BKS loaded a version 0 store without " + Properties.BKS_ENABLE_V1);
+        }
+        catch (IOException e)
+        {
+            if (!e.getMessage().startsWith("BKS version 1 keystore not supported"))
+            {
+                fail("unexpected exception: " + e.getMessage());
+            }
+        }
+        finally
+        {
+            Properties.removeThreadOverride(Properties.BKS_ENABLE_V1);
+        }
+
+        // with the opt-in the legacy store is still readable
+        Properties.setThreadOverride(Properties.BKS_ENABLE_V1, true);
+        try
+        {
+            checkStore(KeyStore.getInstance("BKS", "BC"), v0BKS);
+        }
+        finally
+        {
+            Properties.removeThreadOverride(Properties.BKS_ENABLE_V1);
+        }
+    }
+
     private void oldStoreTest()
         throws Exception
     {
@@ -439,6 +510,8 @@ public class KeyStoreTest
 
         ecStoreTest("BKS");
         oldStoreTest();
+        v1RejectedByDefaultTest();
+        v0RejectedByDefaultTest();
         checkException();
         checkOversizedEntryRejected();
         checkOversizedEncodingRejected();
